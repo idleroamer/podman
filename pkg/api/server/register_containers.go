@@ -17,10 +17,17 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//   produces:
 	//   - application/json
 	//   parameters:
-	//    - in: query
-	//      name: name
-	//      type: string
-	//      description: container name
+	//   - description: "Assign the specified name to the container. Must match `/?[a-zA-Z0-9_-]+`."
+	//     name: "name"
+	//     in: "query"
+	//     type: "string"
+	//     pattern: "/?[a-zA-Z0-9_-]+"
+    //   - name: "body"
+	//     in: "body"
+	//     description: "Container to create"
+	//     schema:
+	//       $ref: "#/definitions/ContainerConfig"
+	//     required: true
 	//   responses:
 	//     201:
 	//       $ref: "#/responses/ContainerCreateResponse"
