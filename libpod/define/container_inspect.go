@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/containers/image/v5/manifest"
+	"github.com/docker/docker/api/types/network"
 )
 
 // InspectContainerConfig holds further data about how a container was initially
@@ -550,7 +551,7 @@ type InspectBasicNetworkConfig struct {
 	IPPrefixLen int `json:"IPPrefixLen"`
 	// SecondaryIPAddresses is a list of extra IP Addresses that the
 	// container has been assigned in this network.
-	SecondaryIPAddresses []string `json:"SecondaryIPAddresses,omitempty"`
+	SecondaryIPAddresses []network.Address `json:"SecondaryIPAddresses,omitempty"`
 	// IPv6Gateway is the IPv6 gateway this network will use.
 	IPv6Gateway string `json:"IPv6Gateway"`
 	// GlobalIPv6Address is the global-scope IPv6 Address for this network.
@@ -559,7 +560,7 @@ type InspectBasicNetworkConfig struct {
 	GlobalIPv6PrefixLen int `json:"GlobalIPv6PrefixLen"`
 	// SecondaryIPv6Addresses is a list of extra IPv6 Addresses that the
 	// container has been assigned in this network.
-	SecondaryIPv6Addresses []string `json:"SecondaryIPv6Addresses,omitempty"`
+	SecondaryIPv6Addresses []network.Address `json:"SecondaryIPv6Addresses,omitempty"`
 	// MacAddress is the MAC address for the interface in this network.
 	MacAddress string `json:"MacAddress"`
 	// AdditionalMacAddresses is a set of additional MAC Addresses beyond

@@ -14,9 +14,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/containernetworking/cni/pkg/types"
 	cnitypes "github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containers/podman/v3/libpod/define"
@@ -30,6 +32,8 @@ import (
 	"github.com/containers/podman/v3/pkg/util"
 	"github.com/containers/storage/pkg/lockfile"
 	"github.com/cri-o/ocicni/pkg/ocicni"
+	dockernetworktype "github.com/docker/docker/api/types/network"
+	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -999,6 +1003,89 @@ func getContainerNetIO(ctr *Container) (*netlink.LinkStatistics, error) {
 	return netStats, err
 }
 
+func (c *Container) getJoinedNetworkStatus(networkns string) (q cnitypes.Result, retErr error) {
+	var (
+		wg sync.WaitGroup
+	)
+	var result cnitypes.Result
+	result.CNIVersion = "none"
+	var err error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		f, err := os.OpenFile(networkns, os.O_RDONLY, 0755)
+		if err != nil {
+			return
+		}
+		if err := unix.Setns(int(f.Fd()), unix.CLONE_NEWNET); err != nil {
+			return
+		}
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			return
+		}
+		for _, iface := range ifaces {
+			if strings.Contains(iface.Flags.String(), "loopback") {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			if len(addrs) == 0 {
+				continue
+			}
+			result.Interfaces = append(result.Interfaces, &cnitypes.Interface{
+				Name: iface.Name,
+				Mac:  iface.HardwareAddr.String(),
+			})
+			interfaceIndex := len(result.Interfaces) - 1
+			for _, address := range addrs {
+				if ipnet, ok := address.(*net.IPNet); ok {
+					if ipnet.IP.To4() != nil {
+						result.IPs = append(result.IPs, &cnitypes.IPConfig{
+							Version:   "4",
+							Address:   *ipnet,
+							Gateway:   ipnet.IP,
+							Interface: &interfaceIndex,
+						})
+					} else {
+						result.IPs = append(result.IPs, &cnitypes.IPConfig{
+							Version:   "6",
+							Address:   *ipnet,
+							Gateway:   ipnet.IP,
+							Interface: &interfaceIndex,
+						})
+					}
+				}
+			}
+		}
+		routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+		if err != nil {
+			return
+		}
+		for _, route := range routes {
+			// default route/gateway
+			if route.Dst == nil {
+				result.Routes = append(result.Routes, &types.Route{
+					GW: route.Gw,
+				})
+			}
+		}
+		for _, route := range routes {
+			// other route
+			if route.Dst != nil {
+				result.Routes = append(result.Routes, &types.Route{
+					Dst: *route.Dst,
+					GW:  route.Gw,
+				})
+			}
+		}
+	}()
+	wg.Wait()
+	return result, err
+}
+
 // Produce an InspectNetworkSettings containing information on the container
 // network.
 func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, error) {
@@ -1026,6 +1113,25 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 	networks, isDefault, err := c.networks()
 	if err != nil {
 		return nil, err
+	}
+
+	for _, namespace := range c.config.Spec.Linux.Namespaces {
+		if namespace.Type == spec.NetworkNamespace {
+			if namespace.Path != "" {
+				networkStatus, err := c.getJoinedNetworkStatus(namespace.Path)
+				if err != nil {
+					logrus.Errorf("Error extracting network namespace of %s for container %s: %v", namespace.Path, c.ID(), err)
+					return nil, err
+				}
+				basicConfig, err := resultToBasicNetworkConfig(&networkStatus)
+				if err != nil {
+					return nil, err
+				}
+				settings.InspectBasicNetworkConfig = basicConfig
+
+				return settings, nil
+			}
+		}
 	}
 
 	// We can't do more if the network is down.
@@ -1144,7 +1250,9 @@ func resultToBasicNetworkConfig(result *cnitypes.Result) (define.InspectBasicNet
 				config.MacAddress = result.Interfaces[*ctrIP.Interface].Mac
 			}
 		case ctrIP.Version == "4" && config.IPAddress != "":
-			config.SecondaryIPAddresses = append(config.SecondaryIPAddresses, ctrIP.Address.String())
+			config.SecondaryIPAddresses = append(config.SecondaryIPAddresses, dockernetworktype.Address{
+				Addr:      ctrIP.Address.String(),
+				PrefixLen: size})
 			if ctrIP.Interface != nil && *ctrIP.Interface < len(result.Interfaces) && *ctrIP.Interface >= 0 {
 				config.AdditionalMacAddresses = append(config.AdditionalMacAddresses, result.Interfaces[*ctrIP.Interface].Mac)
 			}
@@ -1153,7 +1261,9 @@ func resultToBasicNetworkConfig(result *cnitypes.Result) (define.InspectBasicNet
 			config.GlobalIPv6PrefixLen = size
 			config.IPv6Gateway = ctrIP.Gateway.String()
 		case ctrIP.Version == "6" && config.IPAddress != "":
-			config.SecondaryIPv6Addresses = append(config.SecondaryIPv6Addresses, ctrIP.Address.String())
+			config.SecondaryIPv6Addresses = append(config.SecondaryIPv6Addresses, dockernetworktype.Address{
+				Addr:      ctrIP.Address.String(),
+				PrefixLen: size})
 		default:
 			return config, errors.Wrapf(define.ErrInternal, "unrecognized IP version %q", ctrIP.Version)
 		}
