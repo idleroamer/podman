@@ -30,6 +30,7 @@ import (
 	"github.com/containers/podman/v3/pkg/util"
 	"github.com/containers/storage/pkg/lockfile"
 	"github.com/cri-o/ocicni/pkg/ocicni"
+	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -1030,6 +1031,18 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 
 	// We can't do more if the network is down.
 	if c.state.NetNS == nil {
+		if networkNSPath := c.joinedNetworkNSPath(); networkNSPath != "" {
+			if result, err := c.inspectJoinedNetworkNS(networkNSPath); err == nil {
+				if basicConfig, err := resultToBasicNetworkConfig(&result); err == nil {
+					settings.InspectBasicNetworkConfig = basicConfig
+					return settings, nil
+				}
+			}
+			// do not propagate error inspecting a joined network ns
+			logrus.Errorf("Error inspecting network namespace: %s of container %s: %v", networkNSPath, c.ID(), err)
+		}
+		// We can't do more if the network is down.
+
 		// We still want to make dummy configurations for each CNI net
 		// the container joined.
 		if len(networks) > 0 {
@@ -1103,6 +1116,76 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 	}
 
 	return settings, nil
+}
+
+func (c *Container) joinedNetworkNSPath() string {
+	for _, namespace := range c.config.Spec.Linux.Namespaces {
+		if namespace.Type == spec.NetworkNamespace {
+			return namespace.Path
+		}
+	}
+	return ""
+}
+
+func (c *Container) inspectJoinedNetworkNS(networkns string) (q cnitypes.Result, retErr error) {
+	var result cnitypes.Result
+	result.CNIVersion = "none"
+	err := ns.WithNetNSPath(networkns, func(_ ns.NetNS) error {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			return err
+		}
+		routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+		if err != nil {
+			return err
+		}
+		var gateway net.IP
+		for _, route := range routes {
+			// default gateway
+			if route.Dst == nil {
+				gateway = route.Gw
+			}
+		}
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			if len(addrs) == 0 {
+				continue
+			}
+			result.Interfaces = append(result.Interfaces, &cnitypes.Interface{
+				Name: iface.Name,
+				Mac:  iface.HardwareAddr.String(),
+			})
+			interfaceIndex := len(result.Interfaces) - 1
+			for _, address := range addrs {
+				if ipnet, ok := address.(*net.IPNet); ok {
+					if ipnet.IP.IsLinkLocalMulticast() || ipnet.IP.IsLinkLocalUnicast() {
+						continue
+					}
+					version := "6"
+					if ipnet.IP.To4() != nil {
+						version = "4"
+					}
+					subnet := cnitypes.IPConfig{
+						Version:   version,
+						Address:   *ipnet,
+						Interface: &interfaceIndex,
+					}
+					if ipnet.Contains(gateway) {
+						subnet.Gateway = gateway
+					}
+					result.IPs = append(result.IPs, &subnet)
+				}
+			}
+		}
+		return nil
+	})
+	return result, err
 }
 
 // setupNetworkDescriptions adds networks and eth values to the container's
