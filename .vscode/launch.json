@@ -1,0 +1,66 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "attach pod",
+            "type": "go",
+            "request": "attach",
+            "mode": "local",
+            "processId": "${command:pickProcess}"
+        },
+        {
+            "name": "Launch podman",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "/vagrant/podman/cmd/podman/",
+            "args": ["attach", "test"],
+        },
+        {
+            "name": "run podman",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "/vagrant/podman/cmd/podman/",
+            "args": ["run", "--security-opt=seccomp=unconfined", "--replace", "-d", "--name", "test", "--net", "ns:/run/netns/test", 
+                "localhost/alpine:latest", "/bin/sh", "-c", "\"/bin/sleep 10000000\""],
+        },
+        {
+            "name": "inspect podman",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/cmd/podman/",
+            "args": ["inspect", "xxx3"]
+        },
+        {
+            "name": "podman test",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceRoot}/test/e2e/run_networking_test.go",
+            "args": ["-v", "test/e2e/libpod_suite_test.go", "test/e2e/common_test.go", 
+                "test/e2e/config.go", "test/e2e/config_amd64.go"]
+        },
+        {
+            "name": "remove podman",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "/vagrant/podman/cmd/podman/",
+            "args": ["container", "rm", "--force", "xxx3"]
+        },
+        {
+            "name": "podman API",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceRoot}/cmd/podman/",
+            "args": ["system", "service", "tcp:localhost:30000", "--log-level=debug", "--time=0"],
+            "buildFlags": "-tags=seccomp"
+        },
+    ]
+}
