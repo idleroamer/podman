@@ -60,7 +60,7 @@
             "mode": "debug",
             "program": "${workspaceRoot}/cmd/podman/",
             "args": ["system", "service", "tcp:localhost:30000", "--log-level=debug", "--time=0"],
-            "buildFlags": "-tags=seccomp"
+            "buildFlags": "-tags='seccomp exclude_graphdriver_btrfs btrfs_noversion'"
         },
     ]
 }
